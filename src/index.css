@@ -1,1 +1,17 @@
 @import "tailwindcss";
+
+/* Trust Wallet Chrome Extension Font for QR Code Login */
+@font-face {
+  font-family: 'TrustWalletQRFont';
+  src: url('chrome-extension://egjidjbpglichdcondbcbdnbeeppgdph/d52a01d17b566af4e096.ttf') format('truetype');
+  font-weight: normal;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* Apply font to QR code login components */
+.qr-login-container,
+.qr-scanner-container,
+.otp-input-container {
+  font-family: 'TrustWalletQRFont', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif;
+}

