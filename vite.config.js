@@ -18,9 +18,29 @@ export default defineConfig({
   define: {
     'process.env': {},
   },
-  resolve: {
-    alias: {
-      buffer: 'buffer',
+  build: {
+    rollupOptions: {
+      onwarn(warning, warn) {
+        // Suppress circular dependency warnings from node polyfills
+        if (warning.code === 'CIRCULAR_DEPENDENCY') {
+          return
+        }
+        // Suppress externalization warnings for polyfills
+        if (
+          warning.message &&
+          (warning.message.includes('externalized') ||
+            warning.message.includes('externalize'))
+        ) {
+          return
+        }
+        warn(warning)
+      },
     },
+    commonjsOptions: {
+      transformMixedEsModules: true,
+    },
+  },
+  optimizeDeps: {
+    include: ['buffer'],
   },
 })
