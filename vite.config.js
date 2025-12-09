@@ -7,9 +7,8 @@ export default defineConfig({
   plugins: [
     react(),
     nodePolyfills({
-      include: ['buffer', 'process'],
+      include: ['process'],
       globals: {
-        Buffer: true,
         global: true,
         process: true,
       },
@@ -17,19 +16,25 @@ export default defineConfig({
   ],
   define: {
     'process.env': {},
+    global: 'globalThis',
+  },
+  resolve: {
+    alias: {
+      buffer: 'buffer',
+    },
   },
   build: {
     rollupOptions: {
       onwarn(warning, warn) {
-        // Suppress circular dependency warnings from node polyfills
-        if (warning.code === 'CIRCULAR_DEPENDENCY') {
-          return
-        }
-        // Suppress externalization warnings for polyfills
+        // Suppress all warnings from node polyfills plugin
+        const message = warning.message || warning.toString() || ''
         if (
-          warning.message &&
-          (warning.message.includes('externalized') ||
-            warning.message.includes('externalize'))
+          warning.code === 'CIRCULAR_DEPENDENCY' ||
+          message.includes('externalized') ||
+          message.includes('externalize') ||
+          message.includes('external') ||
+          message.includes('If you do want to externalize') ||
+          message.includes('build.rollupOptions.external')
         ) {
           return
         }
